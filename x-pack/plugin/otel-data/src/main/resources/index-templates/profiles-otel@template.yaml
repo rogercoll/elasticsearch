@@ -1,0 +1,49 @@
+---
+version: ${xpack.oteldata.template.version}
+index_patterns: ["profiles-*.otel-*"]
+priority: 120
+data_stream: {}
+allow_auto_create: true
+_meta:
+  description: default OpenTelemetry profiles template installed by x-pack
+  managed: true
+composed_of:
+  - otel@mappings
+  - otel@settings
+  - profiles-otel@mappings
+  - semconv-resource-to-ecs@mappings
+  - profiles-otel@custom
+  - ecs@mappings
+ignore_missing_component_templates:
+  - profiles-otel@custom
+template:
+  settings:
+    index:
+      # time_series mode is required for DSL downsampling.
+      # Overrides the sort-only settings in profiles-otel@mappings.
+      # Mutually exclusive with logsdb (~30% storage saving forgone in exchange for downsampling).
+      mode: time_series
+      # Dimensions that define a unique time series (stack + service + host).
+      # Must cover all fields marked time_series_dimension: true across component templates.
+      # stack_trace_id identifies the unique stack; _sample_hash disambiguates documents
+      # that share the same stack and timestamp (e.g. multiple off-CPU samples in one profile).
+      routing_path:
+        - profile.stack_trace_id
+        - _sample_hash
+  mappings:
+    properties:
+      data_stream.type:
+        type: constant_keyword
+        value: profiles
+  lifecycle:
+    # Profiling data loses actionability quickly — 30 days is sufficient for trend analysis.
+    data_retention: 30d
+    downsampling:
+      # After 3 days: merge into 1h buckets.
+      # stack_trace[] is dropped; stack_trace_id, all_frames, top_frame, and sample.value survive.
+      - after: 3d
+        fixed_interval: 1h
+      # After 14 days: merge into 6h buckets (must be a multiple of 1h).
+      # Only dimensions, metrics, and wildcard/keyword labels remain.
+      - after: 14d
+        fixed_interval: 6h

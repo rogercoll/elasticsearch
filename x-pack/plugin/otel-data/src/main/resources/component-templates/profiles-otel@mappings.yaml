@@ -1,0 +1,80 @@
+---
+version: ${xpack.oteldata.template.version}
+_meta:
+  description: Default mappings for OpenTelemetry profiles
+  managed: true
+template:
+  # time_series mode is set in the index template (profiles-otel@template.yaml).
+  # sort.field is incompatible with time_series mode and must not be set here.
+  mappings:
+    properties:
+      # DIMENSION — unique per document; prevents TSID collisions when multiple samples
+      # share the same stack_trace_id and timestamp (workaround for ES TSDS TSID collision).
+      _sample_hash:
+        type: keyword
+        time_series_dimension: true
+
+      profile:
+        properties:
+          id:
+            type: keyword
+
+          # DIMENSION — identifies a unique stack; used as the group-by key during downsampling.
+          # Every document sharing the same stack_trace_id will be merged into one bucket.
+          stack_trace_id:
+            type: keyword
+            time_series_dimension: true
+
+          sample:
+            properties:
+              # METRIC — summed across all docs merged into the same downsampling bucket.
+              value:
+                type: long
+                time_series_metric: counter
+
+          # LABEL — survives downsampling via last_value.
+          # Because stack_trace_id is a dimension, every doc in a bucket has the same stack,
+          # so last_value is always exact (not lossy).
+          # wildcard type enables: profile.all_frames: *epoll_wait* at any tier.
+          all_frames:
+            type: wildcard
+
+          # Keyword sub-fields survive downsampling as single meaningful values (one per doc).
+          # Enables fast leaf-node aggregations and "which function is currently on-CPU"
+          # queries without array traversal, at any retention tier.
+          # Frames are stored leaf-first (index 0 = top of stack, matching OTel spec).
+          top_frame:
+            properties:
+              function_name:
+                type: keyword
+              frame_type:
+                type: keyword # kernel / go / native / jvm / ...
+              mapping:
+                properties:
+                  filename:
+                    type: keyword
+
+          # Keyword sub-fields (function_name, frame_type, ...) technically survive
+          # downsampling as a flat multi-value set, but frame ordering and per-frame
+          # correlation between fields (e.g. which file_name belongs to which function_name)
+          # are lost. Treat the full array structure as unavailable after the hot tier (0–3d).
+          # Frames are stored leaf-first (index 0 = top of stack).
+          stack_trace:
+            synthetic_source_keep: arrays # preserves frame ordering under logsdb/synthetic source
+            properties:
+              function_name:
+                type: keyword
+              file_name:
+                type: keyword
+              source_line:
+                type: integer
+              address:
+                type: keyword
+              frame_type:
+                type: keyword
+              mapping:
+                properties:
+                  filename:
+                    type: keyword
+                  build_id:
+                    type: keyword
